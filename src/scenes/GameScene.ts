@@ -21,8 +21,14 @@ const PLAYER_SHOT_SCORE = -2;
 const PLAYER_DAMAGE_SCORE = -30;
 const ENEMY_DEFEAT_SCORE = 60;
 const BOSS_DEFEAT_SCORE = 500;
+const BOMB_DAMAGE = 10;
+const ITEM_SPEED = 120;
+const STAR_DURATION = 180 * FRAME_MS;
+const SCORE_BOOST_DURATION = 300 * FRAME_MS;
+const MAX_BOMB_STOCK = 3;
 
 type BossPattern = 'A' | 'B';
+type ItemType = 'bomb' | 'star' | 'scoreBoost';
 type PhysicsObject =
   | Phaser.Types.Physics.Arcade.GameObjectWithBody
   | Phaser.Physics.Arcade.Body
@@ -34,9 +40,11 @@ export class GameScene extends Phaser.Scene {
   private playerBullets!: Phaser.Physics.Arcade.Group;
   private enemyBullets!: Phaser.Physics.Arcade.Group;
   private enemies!: Phaser.Physics.Arcade.Group;
+  private items!: Phaser.Physics.Arcade.Group;
   private boss!: Phaser.Physics.Arcade.Sprite;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private space!: Phaser.Input.Keyboard.Key;
+  private bombKey!: Phaser.Input.Keyboard.Key;
   private score = 0;
   private hp = PLAYER_HP;
   private lastShotAt = -Infinity;
@@ -54,6 +62,12 @@ export class GameScene extends Phaser.Scene {
   private hpText!: Phaser.GameObjects.Text;
   private timeText!: Phaser.GameObjects.Text;
   private bossText!: Phaser.GameObjects.Text;
+  private itemText!: Phaser.GameObjects.Text;
+  private starGauge!: Phaser.GameObjects.Graphics;
+  private scoreBoostGauge!: Phaser.GameObjects.Graphics;
+  private bombStock = 0;
+  private starUntil = 0;
+  private scoreBoostUntil = 0;
 
   constructor() {
     super('GameScene');
@@ -65,6 +79,7 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor('#08111f');
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.space = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    this.bombKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.Z);
     this.input.keyboard!.on('keydown-SPACE', this.handleSpacePress, this);
 
     this.player = this.physics.add.sprite(120, HEIGHT / 2, 'player');
@@ -74,6 +89,7 @@ export class GameScene extends Phaser.Scene {
     this.playerBullets = this.physics.add.group({ defaultKey: 'playerBullet', maxSize: 50, allowGravity: false });
     this.enemyBullets = this.physics.add.group({ defaultKey: 'enemyBullet', maxSize: 40, allowGravity: false });
     this.enemies = this.physics.add.group({ defaultKey: 'enemy', maxSize: 10, allowGravity: false });
+    this.items = this.physics.add.group({ maxSize: 10, allowGravity: false });
     this.boss = this.physics.add.sprite(WIDTH + 100, HEIGHT / 2, 'boss');
     this.boss.setCollideWorldBounds(true);
     this.boss.setActive(false).setVisible(false);
@@ -83,11 +99,15 @@ export class GameScene extends Phaser.Scene {
     this.physics.add.overlap(this.playerBullets, this.boss, this.hitBoss, () => this.bossAttacking, this);
     this.physics.add.overlap(this.enemyBullets, this.player, this.hitPlayer, undefined, this);
     this.physics.add.overlap(this.enemies, this.player, this.touchEnemy, undefined, this);
+    this.physics.add.overlap(this.items, this.player, this.collectItem, undefined, this);
 
     this.scoreText = this.add.text(24, 20, '', this.hudStyle());
     this.hpText = this.add.text(24, 54, '', this.hudStyle());
     this.timeText = this.add.text(1060, 20, '', this.hudStyle());
     this.bossText = this.add.text(460, 20, '', this.hudStyle()).setColor('#ff8b94');
+    this.itemText = this.add.text(24, 88, '', this.hudStyle()).setColor('#ffe29a');
+    this.starGauge = this.add.graphics();
+    this.scoreBoostGauge = this.add.graphics();
     this.updateHud();
   }
 
@@ -105,6 +125,9 @@ export class GameScene extends Phaser.Scene {
     this.ending = false;
     this.enemySpawnTimer = 0;
     this.elapsed = 0;
+    this.bombStock = 0;
+    this.starUntil = 0;
+    this.scoreBoostUntil = 0;
     this.lastBossShotAt = -Infinity;
   }
 
@@ -113,9 +136,13 @@ export class GameScene extends Phaser.Scene {
     this.elapsed += delta;
     this.updatePlayer();
     this.updateHeldFire();
+    if (Phaser.Input.Keyboard.JustDown(this.bombKey)) this.useBomb();
     this.updateEnemySpawn(delta);
     this.updateBoss(delta);
     this.cleanupOffscreen();
+    const starActive = this.elapsed < this.starUntil;
+    this.player.setTint(starActive ? 0xffffe8 : 0xffffff);
+    this.player.setAlpha(starActive ? 0.65 : 1);
     this.updateHud();
   }
 
@@ -125,6 +152,9 @@ export class GameScene extends Phaser.Scene {
     this.makeTexture('boss', 100, 130, 0xc77dff);
     this.makeTexture('playerBullet', 18, 6, 0xffd166);
     this.makeTexture('enemyBullet', 18, 6, 0xff8b94);
+    this.makeTexture('itemBomb', 30, 30, 0xff9f43);
+    this.makeTexture('itemStar', 30, 30, 0xfff1a8);
+    this.makeTexture('itemScoreBoost', 30, 30, 0x7de3ff);
   }
 
   private makeTexture(key: string, width: number, height: number, color: number): void {
@@ -269,7 +299,8 @@ export class GameScene extends Phaser.Scene {
     if (hp <= 0) {
       this.createExplosion(enemy.x, enemy.y, 1);
       enemy.disableBody(true, true);
-      this.score += ENEMY_DEFEAT_SCORE;
+      this.awardDefeatScore(ENEMY_DEFEAT_SCORE);
+      this.tryDropItem(enemy.x, enemy.y);
     } else {
       enemy.setData('hp', hp);
     }
@@ -281,27 +312,85 @@ export class GameScene extends Phaser.Scene {
     const bullet = first?.texture.key === 'playerBullet' ? first : second?.texture.key === 'playerBullet' ? second : null;
     if (!bullet) return;
     bullet.disableBody(true, true);
-    this.bossHp -= 1;
-    if (this.bossHp <= 0) {
-      this.ending = true;
-      this.createExplosion(this.boss.x, this.boss.y, 2.2, 1000);
-      this.boss.disableBody(true, true);
-      this.score += BOSS_DEFEAT_SCORE;
-      this.time.delayedCall(1000, () => this.finish(true), undefined, this);
-    }
+    this.damageBoss(1);
   }
 
   private hitPlayer(_player: PhysicsObject, object2: PhysicsObject): void {
     const bullet = this.toSprite(object2);
     if (!bullet) return;
     bullet.disableBody(true, true);
-    if (this.elapsed < this.invincibleUntil) return;
+    if (this.elapsed < this.starUntil || this.elapsed < this.invincibleUntil) return;
     this.damagePlayer(1);
   }
 
-  private touchEnemy(): void {
+  private touchEnemy(object1: PhysicsObject, object2: PhysicsObject): void {
+    const first = this.toSprite(object1);
+    const second = this.toSprite(object2);
+    const enemy = first?.texture.key === 'enemy' ? first : second?.texture.key === 'enemy' ? second : null;
+    if (this.elapsed < this.starUntil && enemy?.active) {
+      this.createExplosion(enemy.x, enemy.y, 1);
+      enemy.disableBody(true, true);
+      this.awardDefeatScore(ENEMY_DEFEAT_SCORE);
+      this.tryDropItem(enemy.x, enemy.y);
+      return;
+    }
     if (this.elapsed < this.invincibleUntil) return;
     this.damagePlayer(2);
+  }
+
+  private awardDefeatScore(points: number): void {
+    this.score += this.elapsed < this.scoreBoostUntil ? points * 1.25 : points;
+  }
+
+  private tryDropItem(x: number, y: number): void {
+    if (Phaser.Math.Between(0, 1) === 0) return;
+    const itemType = Phaser.Math.RND.pick<ItemType>(['bomb', 'star', 'scoreBoost']);
+    const textureKey = itemType === 'bomb' ? 'itemBomb' : itemType === 'star' ? 'itemStar' : 'itemScoreBoost';
+    const item = this.items.get(x, y, textureKey) as Phaser.Physics.Arcade.Sprite | null;
+    if (!item) return;
+    item.setData('itemType', itemType);
+    item.enableBody(true, x, y, true, true).setVelocityX(-ITEM_SPEED);
+  }
+
+  private collectItem(object1: PhysicsObject, object2: PhysicsObject): void {
+    const first = this.toSprite(object1);
+    const second = this.toSprite(object2);
+    const item = first?.texture.key.startsWith('item') ? first : second?.texture.key.startsWith('item') ? second : null;
+    if (!item) return;
+    const itemType = item.getData('itemType') as ItemType;
+    item.disableBody(true, true);
+    if (itemType === 'bomb') {
+      this.bombStock = Math.min(MAX_BOMB_STOCK, this.bombStock + 1);
+    } else if (itemType === 'star') {
+      this.starUntil = Math.max(this.starUntil, this.elapsed) + STAR_DURATION;
+      this.invincibleUntil = Math.max(this.invincibleUntil, this.starUntil);
+    } else {
+      this.scoreBoostUntil = Math.max(this.scoreBoostUntil, this.elapsed) + SCORE_BOOST_DURATION;
+    }
+  }
+
+  private useBomb(): void {
+    if (this.bombStock <= 0) return;
+    this.bombStock -= 1;
+    for (const child of this.enemies.children) {
+      if (!(child instanceof Phaser.Physics.Arcade.Sprite) || !child.active) continue;
+      this.createExplosion(child.x, child.y, 1);
+      child.disableBody(true, true);
+      this.awardDefeatScore(ENEMY_DEFEAT_SCORE);
+      this.tryDropItem(child.x, child.y);
+    }
+    if (this.bossActive && this.boss.active) this.damageBoss(BOMB_DAMAGE);
+  }
+
+  private damageBoss(amount: number): void {
+    if (!this.boss.active || this.ending) return;
+    this.bossHp -= amount;
+    if (this.bossHp > 0) return;
+    this.ending = true;
+    this.createExplosion(this.boss.x, this.boss.y, 2.2, 1000);
+    this.boss.disableBody(true, true);
+    this.awardDefeatScore(BOSS_DEFEAT_SCORE);
+    this.time.delayedCall(1000, () => this.finish(true), undefined, this);
   }
 
   private damagePlayer(amount: number): void {
@@ -367,6 +456,9 @@ export class GameScene extends Phaser.Scene {
     for (const child of this.enemies.children) {
       if (child instanceof Phaser.Physics.Arcade.Sprite) this.disableEnemyIfOutside(child);
     }
+    for (const child of this.items.children) {
+      if (child instanceof Phaser.Physics.Arcade.Sprite) this.disableItemIfOutside(child);
+    }
   }
 
   private disableIfOutside(object: Phaser.Physics.Arcade.Sprite, minX: number, maxX: number): boolean {
@@ -379,6 +471,16 @@ export class GameScene extends Phaser.Scene {
   private disableEnemyIfOutside(enemy: Phaser.Physics.Arcade.Sprite): void {
     const right = enemy.x + enemy.displayWidth / 2;
     if (enemy.active && right < 0) enemy.disableBody(true, true);
+  }
+
+  private disableItemIfOutside(item: Phaser.Physics.Arcade.Sprite): void {
+    const left = item.x - item.displayWidth / 2;
+    const right = item.x + item.displayWidth / 2;
+    const top = item.y - item.displayHeight / 2;
+    const bottom = item.y + item.displayHeight / 2;
+    if (item.active && (right < 0 || left > WIDTH || bottom < 0 || top > HEIGHT)) {
+      item.disableBody(true, true);
+    }
   }
 
   private toSprite(object: PhysicsObject): Phaser.Physics.Arcade.Sprite | null {
@@ -394,6 +496,23 @@ export class GameScene extends Phaser.Scene {
     this.hpText.setText(`HP  ${Math.max(0, this.hp)}/${PLAYER_HP}`);
     this.timeText.setText(`TIME  ${(this.elapsed / 1000).toFixed(1)}`);
     this.bossText.setText(this.bossActive ? `BOSS  ${Math.max(0, this.bossHp)}/${BOSS_HP}` : '');
+    this.itemText.setText(`BOMB  ${this.bombStock}/${MAX_BOMB_STOCK}   STAR          SCORE x1.25`);
+    this.updateItemGauges();
+  }
+
+  private updateItemGauges(): void {
+    const starRatio = Phaser.Math.Clamp((this.starUntil - this.elapsed) / STAR_DURATION, 0, 1);
+    const scoreBoostRatio = Phaser.Math.Clamp((this.scoreBoostUntil - this.elapsed) / SCORE_BOOST_DURATION, 0, 1);
+    this.drawGauge(this.starGauge, 142, 122, 112, starRatio, 0xfff1a8);
+    this.drawGauge(this.scoreBoostGauge, 360, 122, 112, scoreBoostRatio, 0x7de3ff);
+  }
+
+  private drawGauge(gauge: Phaser.GameObjects.Graphics, x: number, y: number, width: number, ratio: number, color: number): void {
+    gauge.clear();
+    gauge.setAlpha(0.7);
+    gauge.fillStyle(0x26364d, 1).fillRect(x, y, width, 14);
+    if (ratio > 0) gauge.fillStyle(color, 1).fillRect(x, y, width * ratio, 14);
+    gauge.lineStyle(1, 0xd9e8ff, 0.7).strokeRect(x, y, width, 14);
   }
 
   private finish(cleared: boolean): void {
