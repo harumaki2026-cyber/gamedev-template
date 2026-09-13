@@ -12,7 +12,7 @@ export class TitleScene extends Phaser.Scene {
       fontSize: '56px',
       color: '#7de3ff',
     }).setOrigin(0.5);
-    this.add.text(640, 340, '矢印キー: 移動    SPACE: 発射', {
+    this.add.text(640, 340, '矢印キー: 移動    SPACE: 発射    Z: 爆弾', {
       fontFamily: 'sans-serif',
       fontSize: '24px',
       color: '#d9e8ff',
