@@ -1,11 +1,22 @@
 import Phaser from 'phaser';
-
-export type WeaponType = 'pistol' | 'shotgun' | 'assaultRifle';
+import { WEAPON_CONFIG, type WeaponType } from './weapons';
 
 const WEAPON_OPTIONS: { weapon: WeaponType; name: string; description: string }[] = [
-  { weapon: 'pistol', name: 'PISTOL', description: '正面へ1発発射' },
-  { weapon: 'shotgun', name: 'SHOTGUN', description: '左右20度に3発発射' },
-  { weapon: 'assaultRifle', name: 'ASSAULT RIFLE', description: '0.1秒間隔 / Y座標±5px' },
+  {
+    weapon: 'pistol',
+    name: 'PISTOL',
+    description: `正面へ1発\n連打${WEAPON_CONFIG.pistol.tapFireFrames}f / 長押し${WEAPON_CONFIG.pistol.holdFireFrames}f / 消費${WEAPON_CONFIG.pistol.ptCost}pt`,
+  },
+  {
+    weapon: 'shotgun',
+    name: 'SHOTGUN',
+    description: `左右20度に3発\n${WEAPON_CONFIG.shotgun.tapFireFrames}f間隔 / 消費${WEAPON_CONFIG.shotgun.ptCost}pt`,
+  },
+  {
+    weapon: 'assaultRifle',
+    name: 'ASSAULT RIFLE',
+    description: `正面へ1発 / Y座標±10px\n${WEAPON_CONFIG.assaultRifle.holdFireFrames}f間隔 / 消費${WEAPON_CONFIG.assaultRifle.ptCost}pt`,
+  },
 ];
 
 export class WeaponSelectScene extends Phaser.Scene {
@@ -55,7 +66,7 @@ export class WeaponSelectScene extends Phaser.Scene {
       }).setOrigin(0.5));
       this.descriptions.push(this.add.text(x, 410, option.description, {
         fontFamily: 'sans-serif',
-        fontSize: '20px',
+        fontSize: '18px',
         color: '#d9e8ff',
       }).setOrigin(0.5));
     });

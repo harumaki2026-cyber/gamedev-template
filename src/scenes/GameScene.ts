@@ -1,14 +1,11 @@
 import Phaser from 'phaser';
-import type { WeaponType } from './WeaponSelectScene';
+import { WEAPON_CONFIG, type WeaponType } from './weapons';
 
 const WIDTH = 1280;
 const HEIGHT = 720;
 const FRAME_MS = 1000 / 60;
 const PLAYER_SPEED = 500;
 const PLAYER_HP = 20;
-const PLAYER_HOLD_FIRE = 20 * FRAME_MS;
-const PLAYER_TAP_FIRE = 5 * FRAME_MS;
-const ASSAULT_RIFLE_FIRE_INTERVAL = 100;
 const PLAYER_INVINCIBLE = 30 * FRAME_MS;
 const STAR_DURATION = 180 * FRAME_MS;
 const SCORE_BOOST_DURATION = 300 * FRAME_MS;
@@ -20,7 +17,6 @@ const BOSS_HP = 50;
 const BOSS_ENTRY_DISTANCE = 300;
 const BOSS_ENTRY_SPEED = 300;
 const BULLET_SPEED = 1200;
-const PLAYER_SHOT_SCORE = -2;
 const PLAYER_DAMAGE_SCORE = -30;
 const BOSS_DEFEAT_SCORE = 500;
 const SHOTGUN_ANGLES = [-Math.PI / 9, 0, Math.PI / 9];
@@ -260,12 +256,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleSpacePress(): void {
-    const tapInterval = this.weapon === 'assaultRifle' ? ASSAULT_RIFLE_FIRE_INTERVAL : PLAYER_TAP_FIRE;
+    const tapInterval = WEAPON_CONFIG[this.weapon].tapFireFrames * FRAME_MS;
     if (this.elapsed - this.lastShotAt >= tapInterval) this.firePlayerBullet();
   }
 
   private updateHeldFire(): void {
-    const holdInterval = this.weapon === 'assaultRifle' ? ASSAULT_RIFLE_FIRE_INTERVAL : PLAYER_HOLD_FIRE;
+    const holdInterval = WEAPON_CONFIG[this.weapon].holdFireFrames * FRAME_MS;
     if (this.space.isDown && this.elapsed - this.lastShotAt >= holdInterval) {
       this.firePlayerBullet();
     }
@@ -274,7 +270,7 @@ export class GameScene extends Phaser.Scene {
   private firePlayerBullet(): void {
     const angles = this.weapon === 'shotgun' ? SHOTGUN_ANGLES : [0];
     const bulletX = this.player.x + this.player.displayWidth / 2;
-    const bulletY = this.player.y + (this.weapon === 'assaultRifle' ? Phaser.Math.Between(-5, 5) : 0);
+    const bulletY = this.player.y + (this.weapon === 'assaultRifle' ? Phaser.Math.Between(-10, 10) : 0);
     for (const angle of angles) {
       const bullet = this.playerBullets.get(bulletX, bulletY, 'playerBullet') as Phaser.Physics.Arcade.Sprite | null;
       if (!bullet) continue;
@@ -283,7 +279,7 @@ export class GameScene extends Phaser.Scene {
       bullet.setRotation(angle);
     }
     this.lastShotAt = this.elapsed;
-    this.score += PLAYER_SHOT_SCORE;
+    this.score -= WEAPON_CONFIG[this.weapon].ptCost;
   }
 
   private updateEnemySpawn(delta: number): void {
