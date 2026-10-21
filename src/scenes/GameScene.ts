@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import type { WeaponType } from './WeaponSelectScene';
 
 const WIDTH = 1280;
 const HEIGHT = 720;
@@ -7,6 +8,7 @@ const PLAYER_SPEED = 500;
 const PLAYER_HP = 20;
 const PLAYER_HOLD_FIRE = 20 * FRAME_MS;
 const PLAYER_TAP_FIRE = 5 * FRAME_MS;
+const ASSAULT_RIFLE_FIRE_INTERVAL = 100;
 const PLAYER_INVINCIBLE = 30 * FRAME_MS;
 const ENEMY_SPEED = 300;
 const ENEMY_FIRE = 90 * FRAME_MS;
@@ -21,6 +23,7 @@ const PLAYER_SHOT_SCORE = -2;
 const PLAYER_DAMAGE_SCORE = -30;
 const ENEMY_DEFEAT_SCORE = 60;
 const BOSS_DEFEAT_SCORE = 500;
+const SHOTGUN_ANGLES = [-Math.PI / 18, 0, Math.PI / 18];
 
 type BossPattern = 'A' | 'B';
 type PhysicsObject =
@@ -54,9 +57,14 @@ export class GameScene extends Phaser.Scene {
   private hpText!: Phaser.GameObjects.Text;
   private timeText!: Phaser.GameObjects.Text;
   private bossText!: Phaser.GameObjects.Text;
+  private weapon: WeaponType = 'pistol';
 
   constructor() {
     super('GameScene');
+  }
+
+  init(data: { weapon?: WeaponType }): void {
+    this.weapon = data.weapon === 'shotgun' || data.weapon === 'assaultRifle' ? data.weapon : 'pistol';
   }
 
   create(): void {
@@ -146,19 +154,28 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleSpacePress(): void {
-    if (this.elapsed - this.lastShotAt >= PLAYER_TAP_FIRE) this.firePlayerBullet();
+    const tapInterval = this.weapon === 'assaultRifle' ? ASSAULT_RIFLE_FIRE_INTERVAL : PLAYER_TAP_FIRE;
+    if (this.elapsed - this.lastShotAt >= tapInterval) this.firePlayerBullet();
   }
 
   private updateHeldFire(): void {
-    if (this.space.isDown && this.elapsed - this.lastShotAt >= PLAYER_HOLD_FIRE) {
+    const holdInterval = this.weapon === 'assaultRifle' ? ASSAULT_RIFLE_FIRE_INTERVAL : PLAYER_HOLD_FIRE;
+    if (this.space.isDown && this.elapsed - this.lastShotAt >= holdInterval) {
       this.firePlayerBullet();
     }
   }
 
   private firePlayerBullet(): void {
-    const bullet = this.playerBullets.get(this.player.x + this.player.displayWidth / 2, this.player.y, 'playerBullet') as Phaser.Physics.Arcade.Sprite | null;
-    if (!bullet) return;
-    bullet.enableBody(true, this.player.x + this.player.displayWidth / 2, this.player.y, true, true).setVelocityX(BULLET_SPEED);
+    const angles = this.weapon === 'shotgun' ? SHOTGUN_ANGLES : [0];
+    const bulletX = this.player.x + this.player.displayWidth / 2;
+    const bulletY = this.player.y + (this.weapon === 'assaultRifle' ? Phaser.Math.Between(-5, 5) : 0);
+    for (const angle of angles) {
+      const bullet = this.playerBullets.get(bulletX, bulletY, 'playerBullet') as Phaser.Physics.Arcade.Sprite | null;
+      if (!bullet) continue;
+      bullet.enableBody(true, bulletX, bulletY, true, true);
+      bullet.setVelocity(Math.cos(angle) * BULLET_SPEED, Math.sin(angle) * BULLET_SPEED);
+      bullet.setRotation(angle);
+    }
     this.lastShotAt = this.elapsed;
     this.score += PLAYER_SHOT_SCORE;
   }
