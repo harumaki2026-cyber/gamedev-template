@@ -12,10 +12,15 @@ export class TitleScene extends Phaser.Scene {
       fontSize: '56px',
       color: '#7de3ff',
     }).setOrigin(0.5);
-    this.add.text(640, 340, '矢印キー: 移動    SPACE: 発射', {
+    this.add.text(640, 325, '矢印キー: 移動    SPACE: 発射    Z: 爆弾', {
       fontFamily: 'sans-serif',
       fontSize: '24px',
       color: '#d9e8ff',
+    }).setOrigin(0.5);
+    this.add.text(640, 390, '敵を倒して爆弾・スター無敵・スコア倍率アイテムを獲得しよう', {
+      fontFamily: 'sans-serif',
+      fontSize: '18px',
+      color: '#a9bdd6',
     }).setOrigin(0.5);
     this.add.text(640, 470, 'ENTERキーで開始', {
       fontFamily: 'sans-serif',

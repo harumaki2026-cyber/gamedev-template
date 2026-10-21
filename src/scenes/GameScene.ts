@@ -8,39 +8,100 @@ const PLAYER_HP = 20;
 const PLAYER_HOLD_FIRE = 20 * FRAME_MS;
 const PLAYER_TAP_FIRE = 5 * FRAME_MS;
 const PLAYER_INVINCIBLE = 30 * FRAME_MS;
-const ENEMY_SPEED = 300;
-const ENEMY_FIRE = 90 * FRAME_MS;
-const ENEMY_SPAWN = 60 * FRAME_MS;
+const STAR_DURATION = 180 * FRAME_MS;
+const SCORE_BOOST_DURATION = 300 * FRAME_MS;
+const ITEM_DROP_CHANCE = 0.5;
+const ITEM_SPEED = 180;
 const BOSS_SPAWN = 1200 * FRAME_MS;
 const BOSS_PATTERN_SWITCH = 300 * FRAME_MS;
 const BOSS_HP = 50;
 const BOSS_ENTRY_DISTANCE = 300;
-const BOSS_ENTRY_SPEED = 200;
+const BOSS_ENTRY_SPEED = 300;
 const BULLET_SPEED = 1200;
 const PLAYER_SHOT_SCORE = -2;
 const PLAYER_DAMAGE_SCORE = -30;
-const ENEMY_DEFEAT_SCORE = 60;
 const BOSS_DEFEAT_SCORE = 500;
 
 type BossPattern = 'A' | 'B';
+type EnemyType = 'A' | 'B' | 'C';
+type ItemType = 'bomb' | 'star' | 'scoreBoost';
 type PhysicsObject =
   | Phaser.Types.Physics.Arcade.GameObjectWithBody
   | Phaser.Physics.Arcade.Body
   | Phaser.Physics.Arcade.StaticBody
   | Phaser.Tilemaps.Tile;
 
+const ENEMY_CONFIG: Record<EnemyType, {
+  texture: string;
+  width: number;
+  height: number;
+  color: number;
+  speed: number;
+  hp: number;
+  fireInterval: number | null;
+  contactDamage: number;
+  defeatScore: number;
+  spawnInterval: number;
+  maxCount: number;
+}> = {
+  A: {
+    texture: 'enemyA',
+    width: 35,
+    height: 35,
+    color: 0xff5964,
+    speed: 400,
+    hp: 1,
+    fireInterval: 120 * FRAME_MS,
+    contactDamage: 2,
+    defeatScore: 60,
+    spawnInterval: 50 * FRAME_MS,
+    maxCount: 10,
+  },
+  B: {
+    texture: 'enemyB',
+    width: 75,
+    height: 75,
+    color: 0xff9f43,
+    speed: 200,
+    hp: 4,
+    fireInterval: 180 * FRAME_MS,
+    contactDamage: 2,
+    defeatScore: 60,
+    spawnInterval: 90 * FRAME_MS,
+    maxCount: 5,
+  },
+  C: {
+    texture: 'enemyC',
+    width: 40,
+    height: 40,
+    color: 0x7de3ff,
+    speed: 500,
+    hp: 1,
+    fireInterval: null,
+    contactDamage: 1,
+    defeatScore: 20,
+    spawnInterval: 80 * FRAME_MS,
+    maxCount: 5,
+  },
+};
+
 export class GameScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
   private playerBullets!: Phaser.Physics.Arcade.Group;
   private enemyBullets!: Phaser.Physics.Arcade.Group;
   private enemies!: Phaser.Physics.Arcade.Group;
+  private items!: Phaser.Physics.Arcade.Group;
   private boss!: Phaser.Physics.Arcade.Sprite;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private space!: Phaser.Input.Keyboard.Key;
+  private bombKey!: Phaser.Input.Keyboard.Key;
   private score = 0;
   private hp = PLAYER_HP;
   private lastShotAt = -Infinity;
   private invincibleUntil = 0;
+  private starUntil = 0;
+  private scoreBoostUntil = 0;
+  private bombStock = 0;
   private bossHp = BOSS_HP;
   private bossActive = false;
   private bossAttacking = false;
@@ -48,12 +109,13 @@ export class GameScene extends Phaser.Scene {
   private bossPatternStartedAt = 0;
   private bossDirection = 1;
   private ending = false;
-  private enemySpawnTimer = 0;
+  private enemySpawnTimers: Record<EnemyType, number> = { A: 0, B: 0, C: 0 };
   private elapsed = 0;
   private scoreText!: Phaser.GameObjects.Text;
   private hpText!: Phaser.GameObjects.Text;
   private timeText!: Phaser.GameObjects.Text;
   private bossText!: Phaser.GameObjects.Text;
+  private itemText!: Phaser.GameObjects.Text;
 
   constructor() {
     super('GameScene');
@@ -65,7 +127,7 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor('#08111f');
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.space = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
-    this.input.keyboard!.on('keydown-SPACE', this.handleSpacePress, this);
+    this.bombKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.Z);
 
     this.player = this.physics.add.sprite(120, HEIGHT / 2, 'player');
     this.player.setCollideWorldBounds(true);
@@ -73,7 +135,8 @@ export class GameScene extends Phaser.Scene {
 
     this.playerBullets = this.physics.add.group({ defaultKey: 'playerBullet', maxSize: 50, allowGravity: false });
     this.enemyBullets = this.physics.add.group({ defaultKey: 'enemyBullet', maxSize: 40, allowGravity: false });
-    this.enemies = this.physics.add.group({ defaultKey: 'enemy', maxSize: 10, allowGravity: false });
+    this.enemies = this.physics.add.group({ defaultKey: 'enemyA', maxSize: 20, allowGravity: false });
+    this.items = this.physics.add.group({ defaultKey: 'itemBomb', maxSize: 20, allowGravity: false });
     this.boss = this.physics.add.sprite(WIDTH + 100, HEIGHT / 2, 'boss');
     this.boss.setCollideWorldBounds(true);
     this.boss.setActive(false).setVisible(false);
@@ -83,11 +146,13 @@ export class GameScene extends Phaser.Scene {
     this.physics.add.overlap(this.playerBullets, this.boss, this.hitBoss, () => this.bossAttacking, this);
     this.physics.add.overlap(this.enemyBullets, this.player, this.hitPlayer, undefined, this);
     this.physics.add.overlap(this.enemies, this.player, this.touchEnemy, undefined, this);
+    this.physics.add.overlap(this.items, this.player, this.collectItem, undefined, this);
 
     this.scoreText = this.add.text(24, 20, '', this.hudStyle());
     this.hpText = this.add.text(24, 54, '', this.hudStyle());
     this.timeText = this.add.text(1060, 20, '', this.hudStyle());
     this.bossText = this.add.text(460, 20, '', this.hudStyle()).setColor('#ff8b94');
+    this.itemText = this.add.text(24, 88, '', this.hudStyle()).setFontSize('18px').setColor('#ffd166');
     this.updateHud();
   }
 
@@ -96,6 +161,9 @@ export class GameScene extends Phaser.Scene {
     this.hp = PLAYER_HP;
     this.lastShotAt = -Infinity;
     this.invincibleUntil = 0;
+    this.starUntil = 0;
+    this.scoreBoostUntil = 0;
+    this.bombStock = 0;
     this.bossHp = BOSS_HP;
     this.bossActive = false;
     this.bossAttacking = false;
@@ -103,7 +171,7 @@ export class GameScene extends Phaser.Scene {
     this.bossPatternStartedAt = 0;
     this.bossDirection = 1;
     this.ending = false;
-    this.enemySpawnTimer = 0;
+    this.enemySpawnTimers = { A: 0, B: 0, C: 0 };
     this.elapsed = 0;
     this.lastBossShotAt = -Infinity;
   }
@@ -112,19 +180,28 @@ export class GameScene extends Phaser.Scene {
     if (this.ending) return;
     this.elapsed += delta;
     this.updatePlayer();
+    if (Phaser.Input.Keyboard.JustDown(this.space)) this.handleSpacePress();
     this.updateHeldFire();
+    if (Phaser.Input.Keyboard.JustDown(this.bombKey)) this.useBomb();
     this.updateEnemySpawn(delta);
+    this.updateEnemyFiring();
     this.updateBoss(delta);
     this.cleanupOffscreen();
+    this.updatePlayerStatus();
     this.updateHud();
   }
 
   private createTextures(): void {
     this.makeTexture('player', 63, 42, 0x7de3ff);
-    this.makeTexture('enemy', 54, 54, 0xff5964);
+    for (const config of Object.values(ENEMY_CONFIG)) {
+      this.makeTexture(config.texture, config.width, config.height, config.color);
+    }
     this.makeTexture('boss', 100, 130, 0xc77dff);
     this.makeTexture('playerBullet', 18, 6, 0xffd166);
     this.makeTexture('enemyBullet', 18, 6, 0xff8b94);
+    this.makeItemTexture('itemBomb', 'bomb');
+    this.makeItemTexture('itemStar', 'star');
+    this.makeItemTexture('itemScoreBoost', 'scoreBoost');
   }
 
   private makeTexture(key: string, width: number, height: number, color: number): void {
@@ -135,14 +212,43 @@ export class GameScene extends Phaser.Scene {
     graphics.destroy();
   }
 
+  private makeItemTexture(key: string, itemType: ItemType): void {
+    if (this.textures.exists(key)) return;
+    const graphics = this.add.graphics();
+    graphics.fillStyle(0xffffff, 1);
+    if (itemType === 'bomb') {
+      graphics.fillStyle(0x73d7ff, 1).fillCircle(16, 19, 10);
+      graphics.lineStyle(3, 0xffd166, 1).lineBetween(21, 12, 25, 6);
+      graphics.fillStyle(0xff5964, 1).fillCircle(26, 5, 3);
+    } else if (itemType === 'star') {
+      const points = Array.from({ length: 10 }, (_, index) => {
+        const angle = -Math.PI / 2 + index * Math.PI / 5;
+        const radius = index % 2 === 0 ? 15 : 7;
+        return new Phaser.Math.Vector2(16 + Math.cos(angle) * radius, 16 + Math.sin(angle) * radius);
+      });
+      graphics.fillStyle(0xffe066, 1).fillPoints(points, true);
+      graphics.lineStyle(2, 0xffffff, 1).strokePoints(points, true);
+    } else {
+      graphics.fillStyle(0xa98bff, 1).fillRoundedRect(2, 3, 28, 26, 6);
+      graphics.lineStyle(3, 0xffffff, 1).lineBetween(8, 16, 16, 16);
+      graphics.lineBetween(12, 12, 12, 20);
+      graphics.lineBetween(19, 12, 26, 12);
+      graphics.lineBetween(19, 16, 26, 16);
+      graphics.lineBetween(19, 20, 26, 20);
+    }
+    graphics.generateTexture(key, 32, 32);
+    graphics.destroy();
+  }
+
   private hudStyle(): Phaser.Types.GameObjects.Text.TextStyle {
     return { fontFamily: 'sans-serif', fontSize: '22px', color: '#d9e8ff' };
   }
 
   private updatePlayer(): void {
     const vertical = (this.cursors.down.isDown ? 1 : 0) - (this.cursors.up.isDown ? 1 : 0);
-    this.player.setVelocityY(vertical * PLAYER_SPEED);
-    this.player.setVelocityX(0);
+    const horizontal = (this.cursors.right.isDown ? 1 : 0) - (this.cursors.left.isDown ? 1 : 0);
+    const direction = new Phaser.Math.Vector2(horizontal, vertical).normalize();
+    this.player.setVelocity(direction.x * PLAYER_SPEED, direction.y * PLAYER_SPEED);
   }
 
   private handleSpacePress(): void {
@@ -165,25 +271,56 @@ export class GameScene extends Phaser.Scene {
 
   private updateEnemySpawn(delta: number): void {
     if (this.bossActive) return;
-    this.enemySpawnTimer += delta;
-    if (this.enemySpawnTimer < ENEMY_SPAWN) return;
-    this.enemySpawnTimer -= ENEMY_SPAWN;
-    const enemyY = Phaser.Math.Between(60, HEIGHT - 60);
-    const enemy = this.enemies.get(WIDTH + 30, enemyY) as Phaser.Physics.Arcade.Sprite | null;
+    for (const enemyType of Object.keys(ENEMY_CONFIG) as EnemyType[]) {
+      const config = ENEMY_CONFIG[enemyType];
+      this.enemySpawnTimers[enemyType] += delta;
+      if (this.enemySpawnTimers[enemyType] < config.spawnInterval) continue;
+      this.enemySpawnTimers[enemyType] -= config.spawnInterval;
+      const count = this.enemies.getChildren().filter((child) =>
+        child.active
+        && child instanceof Phaser.Physics.Arcade.Sprite
+        && child.getData('type') === enemyType,
+      ).length;
+      if (count >= config.maxCount) continue;
+      this.spawnEnemy(enemyType, config);
+    }
+  }
+
+  private spawnEnemy(enemyType: EnemyType, config: (typeof ENEMY_CONFIG)[EnemyType]): void {
+    const startX = WIDTH + config.width / 2;
+    const startY = Phaser.Math.Between(config.height / 2, HEIGHT - config.height / 2);
+    const enemy = this.enemies.get(startX, startY, config.texture) as Phaser.Physics.Arcade.Sprite | null;
     if (!enemy) return;
-    enemy.enableBody(true, WIDTH + 30, enemyY, true, true).setData('hp', 2).setVelocityX(-ENEMY_SPEED);
-    this.time.delayedCall(ENEMY_FIRE, () => this.fireEnemyBullet(enemy), undefined, this);
+    enemy.setTexture(config.texture);
+    enemy.enableBody(true, startX, startY, true, true)
+      .setData('type', enemyType)
+      .setData('hp', config.hp)
+      .setData('nextFireAt', this.elapsed + (config.fireInterval ?? Infinity));
+    enemy.body?.setSize(config.width, config.height);
+
+    if (enemyType === 'C') {
+      const angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, this.player.x, this.player.y);
+      enemy.setRotation(angle).setVelocity(Math.cos(angle) * config.speed, Math.sin(angle) * config.speed);
+    } else {
+      enemy.setRotation(0).setVelocityX(-config.speed).setVelocityY(0);
+    }
   }
 
   private fireEnemyBullet(source: Phaser.Physics.Arcade.Sprite): void {
     if (!source.active) return;
-    if (source === this.boss) {
-      this.fireBossSpread();
-    } else {
-      this.fireEnemyBulletFrom(source.x - source.displayWidth / 2, source.y);
-    }
-    if (source !== this.boss && source.active && !this.bossActive) {
-      this.time.delayedCall(ENEMY_FIRE, () => this.fireEnemyBullet(source), undefined, this);
+    if (source === this.boss) this.fireBossSpread();
+    else this.fireEnemyBulletFrom(source.x - source.displayWidth / 2, source.y);
+  }
+
+  private updateEnemyFiring(): void {
+    if (this.bossActive) return;
+    for (const child of this.enemies.getChildren()) {
+      if (!(child instanceof Phaser.Physics.Arcade.Sprite) || !child.active) continue;
+      const enemyType = child.getData('type') as EnemyType;
+      const config = ENEMY_CONFIG[enemyType];
+      if (config.fireInterval === null || this.elapsed < (child.getData('nextFireAt') as number)) continue;
+      this.fireEnemyBullet(child);
+      child.setData('nextFireAt', this.elapsed + config.fireInterval);
     }
   }
 
@@ -262,14 +399,12 @@ export class GameScene extends Phaser.Scene {
     const first = this.toSprite(object1);
     const second = this.toSprite(object2);
     const bullet = first?.texture.key === 'playerBullet' ? first : second?.texture.key === 'playerBullet' ? second : null;
-    const enemy = first?.texture.key === 'enemy' ? first : second?.texture.key === 'enemy' ? second : null;
+    const enemy = first?.getData('type') ? first : second?.getData('type') ? second : null;
     if (!bullet || !enemy) return;
     bullet.disableBody(true, true);
     const hp = (enemy.getData('hp') as number) - 1;
     if (hp <= 0) {
-      this.createExplosion(enemy.x, enemy.y, 1);
-      enemy.disableBody(true, true);
-      this.score += ENEMY_DEFEAT_SCORE;
+      this.killEnemy(enemy);
     } else {
       enemy.setData('hp', hp);
     }
@@ -281,36 +416,114 @@ export class GameScene extends Phaser.Scene {
     const bullet = first?.texture.key === 'playerBullet' ? first : second?.texture.key === 'playerBullet' ? second : null;
     if (!bullet) return;
     bullet.disableBody(true, true);
-    this.bossHp -= 1;
-    if (this.bossHp <= 0) {
-      this.ending = true;
-      this.createExplosion(this.boss.x, this.boss.y, 2.2, 1000);
-      this.boss.disableBody(true, true);
-      this.score += BOSS_DEFEAT_SCORE;
-      this.time.delayedCall(1000, () => this.finish(true), undefined, this);
-    }
+    this.damageBoss(1);
   }
 
-  private hitPlayer(_player: PhysicsObject, object2: PhysicsObject): void {
-    const bullet = this.toSprite(object2);
+  private hitPlayer(object1: PhysicsObject, object2: PhysicsObject): void {
+    const first = this.toSprite(object1);
+    const second = this.toSprite(object2);
+    const bullet = first?.texture.key === 'enemyBullet'
+      ? first
+      : second?.texture.key === 'enemyBullet'
+        ? second
+        : null;
     if (!bullet) return;
     bullet.disableBody(true, true);
+    if (this.isStarActive()) return;
     if (this.elapsed < this.invincibleUntil) return;
     this.damagePlayer(1);
   }
 
-  private touchEnemy(): void {
+  private touchEnemy(enemyObject: PhysicsObject, _playerObject: PhysicsObject): void {
+    const enemy = this.toSprite(enemyObject);
+    if (!enemy || !enemy.active) return;
+    if (this.isStarActive()) {
+      this.killEnemy(enemy);
+      return;
+    }
     if (this.elapsed < this.invincibleUntil) return;
-    this.damagePlayer(2);
+    const enemyType = enemy.getData('type') as EnemyType;
+    this.damagePlayer(ENEMY_CONFIG[enemyType].contactDamage);
   }
 
   private damagePlayer(amount: number): void {
     this.hp -= amount;
     this.score += PLAYER_DAMAGE_SCORE;
     this.invincibleUntil = this.elapsed + PLAYER_INVINCIBLE;
-    this.player.setAlpha(0.45);
-    this.time.delayedCall(PLAYER_INVINCIBLE, () => this.player.setAlpha(1), undefined, this);
     if (this.hp <= 0) this.finish(false);
+  }
+
+  private killEnemy(enemy: Phaser.Physics.Arcade.Sprite): void {
+    if (!enemy.active) return;
+    const enemyType = enemy.getData('type') as EnemyType;
+    this.createExplosion(enemy.x, enemy.y, 1);
+    enemy.disableBody(true, true);
+    this.addPoints(ENEMY_CONFIG[enemyType].defeatScore);
+    if (Phaser.Math.RND.frac() < ITEM_DROP_CHANCE) this.dropItem(enemy.x, enemy.y);
+  }
+
+  private dropItem(x: number, y: number): void {
+    const itemType = Phaser.Math.RND.pick(['bomb', 'star', 'scoreBoost'] as const);
+    const texture = itemType === 'bomb' ? 'itemBomb' : itemType === 'star' ? 'itemStar' : 'itemScoreBoost';
+    const item = this.items.get(x, y, texture) as Phaser.Physics.Arcade.Sprite | null;
+    if (!item) return;
+    item.setTexture(texture);
+    item.enableBody(true, x, y, true, true)
+      .setData('itemType', itemType)
+      .setVelocity(-ITEM_SPEED, 0);
+  }
+
+  private collectItem(itemObject: PhysicsObject, _playerObject: PhysicsObject): void {
+    const item = this.toSprite(itemObject);
+    if (!item || !item.active) return;
+    const itemType = item.getData('itemType') as ItemType;
+    item.disableBody(true, true);
+
+    if (itemType === 'bomb') {
+      this.bombStock = Math.min(3, this.bombStock + 1);
+    } else if (itemType === 'star') {
+      this.starUntil = this.elapsed + STAR_DURATION;
+    } else {
+      this.scoreBoostUntil = this.elapsed + SCORE_BOOST_DURATION;
+    }
+  }
+
+  private useBomb(): void {
+    if (this.bombStock <= 0 || !this.bossAttacking || this.ending) return;
+    this.bombStock -= 1;
+    this.damageBoss(10);
+  }
+
+  private damageBoss(amount: number): void {
+    if (this.ending || !this.bossAttacking) return;
+    this.bossHp = Math.max(0, this.bossHp - amount);
+    if (this.bossHp > 0) return;
+    this.ending = true;
+    this.createExplosion(this.boss.x, this.boss.y, 2.2, 1000);
+    this.boss.disableBody(true, true);
+    this.addPoints(BOSS_DEFEAT_SCORE);
+    this.time.delayedCall(1000, () => this.finish(true), undefined, this);
+  }
+
+  private addPoints(points: number): void {
+    const multiplier = this.elapsed < this.scoreBoostUntil ? 1.25 : 1;
+    this.score += Math.round(points * multiplier);
+  }
+
+  private isStarActive(): boolean {
+    return this.elapsed < this.starUntil;
+  }
+
+  private updatePlayerStatus(): void {
+    if (this.isStarActive()) {
+      const flashOn = Math.floor((this.elapsed - (this.starUntil - STAR_DURATION)) / 500) % 2 === 0;
+      if (flashOn) this.player.setTint(0xffffff).setTintMode(Phaser.TintModes.FILL);
+      else this.player.clearTint();
+      this.player.setAlpha(1);
+      return;
+    }
+    this.player.clearTint();
+    this.player.setAlpha(this.elapsed < this.invincibleUntil ? 0.45 : 1);
   }
 
   private createExplosion(x: number, y: number, size: number, duration = 500): void {
@@ -367,6 +580,9 @@ export class GameScene extends Phaser.Scene {
     for (const child of this.enemies.children) {
       if (child instanceof Phaser.Physics.Arcade.Sprite) this.disableEnemyIfOutside(child);
     }
+    for (const child of this.items.children) {
+      if (child instanceof Phaser.Physics.Arcade.Sprite) this.disableIfOutside(child, 0, WIDTH);
+    }
   }
 
   private disableIfOutside(object: Phaser.Physics.Arcade.Sprite, minX: number, maxX: number): boolean {
@@ -377,8 +593,15 @@ export class GameScene extends Phaser.Scene {
   }
 
   private disableEnemyIfOutside(enemy: Phaser.Physics.Arcade.Sprite): void {
+    const left = enemy.x - enemy.displayWidth / 2;
     const right = enemy.x + enemy.displayWidth / 2;
-    if (enemy.active && right < 0) enemy.disableBody(true, true);
+    const top = enemy.y - enemy.displayHeight / 2;
+    const bottom = enemy.y + enemy.displayHeight / 2;
+    const enemyType = enemy.getData('type') as EnemyType;
+    const outside = enemyType === 'C'
+      ? right < 0 || left > WIDTH || bottom < 0 || top > HEIGHT
+      : right < 0;
+    if (enemy.active && outside) enemy.disableBody(true, true);
   }
 
   private toSprite(object: PhysicsObject): Phaser.Physics.Arcade.Sprite | null {
@@ -394,9 +617,14 @@ export class GameScene extends Phaser.Scene {
     this.hpText.setText(`HP  ${Math.max(0, this.hp)}/${PLAYER_HP}`);
     this.timeText.setText(`TIME  ${(this.elapsed / 1000).toFixed(1)}`);
     this.bossText.setText(this.bossActive ? `BOSS  ${Math.max(0, this.bossHp)}/${BOSS_HP}` : '');
+    const statuses = [`BOMB  ${this.bombStock}/3`];
+    if (this.isStarActive()) statuses.push(`STAR  ${((this.starUntil - this.elapsed) / 1000).toFixed(1)}s`);
+    if (this.elapsed < this.scoreBoostUntil) statuses.push(`P+  ${((this.scoreBoostUntil - this.elapsed) / 1000).toFixed(1)}s`);
+    this.itemText.setText(statuses.join('     '));
   }
 
   private finish(cleared: boolean): void {
+    this.ending = true;
     this.scene.start('GameOverScene', { cleared, score: this.score });
   }
 }
