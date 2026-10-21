@@ -17,13 +17,13 @@ export class TitleScene extends Phaser.Scene {
       fontSize: '24px',
       color: '#d9e8ff',
     }).setOrigin(0.5);
-    this.add.text(640, 470, 'ENTERキーで開始', {
+    this.add.text(640, 470, 'ENTERキーで武器選択', {
       fontFamily: 'sans-serif',
       fontSize: '28px',
       color: '#ffd166',
     }).setOrigin(0.5);
 
     const enter = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
-    enter?.once('down', () => this.scene.start('GameScene'));
+    enter?.once('down', () => this.scene.start('WeaponSelectScene'));
   }
 }
