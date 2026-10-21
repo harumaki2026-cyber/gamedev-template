@@ -4,7 +4,7 @@ export type WeaponType = 'pistol' | 'shotgun' | 'assaultRifle';
 
 const WEAPON_OPTIONS: { weapon: WeaponType; name: string; description: string }[] = [
   { weapon: 'pistol', name: 'PISTOL', description: '正面へ1発発射' },
-  { weapon: 'shotgun', name: 'SHOTGUN', description: '20度に3発発射' },
+  { weapon: 'shotgun', name: 'SHOTGUN', description: '左右20度に3発発射' },
   { weapon: 'assaultRifle', name: 'ASSAULT RIFLE', description: '0.1秒間隔 / Y座標±5px' },
 ];
 

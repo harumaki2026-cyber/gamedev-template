@@ -23,7 +23,7 @@ const BULLET_SPEED = 1200;
 const PLAYER_SHOT_SCORE = -2;
 const PLAYER_DAMAGE_SCORE = -30;
 const BOSS_DEFEAT_SCORE = 500;
-const SHOTGUN_ANGLES = [-Math.PI / 18, 0, Math.PI / 18];
+const SHOTGUN_ANGLES = [-Math.PI / 9, 0, Math.PI / 9];
 
 type BossPattern = 'A' | 'B';
 type EnemyType = 'A' | 'B' | 'C';
