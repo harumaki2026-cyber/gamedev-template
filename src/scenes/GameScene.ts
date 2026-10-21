@@ -538,7 +538,7 @@ export class GameScene extends Phaser.Scene {
       child instanceof Phaser.Physics.Arcade.Sprite && child.active,
     );
     for (const enemy of enemies) this.killEnemy(enemy);
-    if (this.bossActive) this.damageBoss(10);
+    if (this.bossActive) this.damageBoss(5);
   }
 
   private damageBoss(amount: number): void {
