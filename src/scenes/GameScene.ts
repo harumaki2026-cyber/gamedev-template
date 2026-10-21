@@ -9,7 +9,7 @@ const PLAYER_HP = 20;
 const PLAYER_INVINCIBLE = 30 * FRAME_MS;
 const STAR_DURATION = 180 * FRAME_MS;
 const SCORE_BOOST_DURATION = 300 * FRAME_MS;
-const ITEM_DROP_CHANCE = 0.5;
+const ITEM_DROP_CHANCE = 0.25;
 const ITEM_SPEED = 180;
 const BOSS_SPAWN = 1200 * FRAME_MS;
 const BOSS_PATTERN_SWITCH = 300 * FRAME_MS;
@@ -24,6 +24,10 @@ const SHOTGUN_ANGLES = [-Math.PI / 9, 0, Math.PI / 9];
 type BossPattern = 'A' | 'B';
 type EnemyType = 'A' | 'B' | 'C';
 type ItemType = 'bomb' | 'star' | 'scoreBoost';
+type ItemEffect = {
+  type: ItemType;
+  duration: number;
+};
 type PhysicsObject =
   | Phaser.Types.Physics.Arcade.GameObjectWithBody
   | Phaser.Physics.Arcade.Body
@@ -115,6 +119,7 @@ export class GameScene extends Phaser.Scene {
   private timeText!: Phaser.GameObjects.Text;
   private bossText!: Phaser.GameObjects.Text;
   private itemText!: Phaser.GameObjects.Text;
+  private itemGauge!: Phaser.GameObjects.Graphics;
   private weapon: WeaponType = 'pistol';
 
   constructor() {
@@ -150,13 +155,15 @@ export class GameScene extends Phaser.Scene {
     this.physics.add.overlap(this.playerBullets, this.boss, this.hitBoss, () => this.bossAttacking, this);
     this.physics.add.overlap(this.enemyBullets, this.player, this.hitPlayer, undefined, this);
     this.physics.add.overlap(this.enemies, this.player, this.touchEnemy, undefined, this);
-    this.physics.add.overlap(this.items, this.player, this.collectItem, undefined, this);
+    this.physics.add.overlap(this.player, this.items, this.collectItem, undefined, this);
 
     this.scoreText = this.add.text(24, 20, '', this.hudStyle());
     this.hpText = this.add.text(24, 54, '', this.hudStyle());
     this.timeText = this.add.text(1060, 20, '', this.hudStyle());
     this.bossText = this.add.text(460, 20, '', this.hudStyle()).setColor('#ff8b94');
     this.itemText = this.add.text(24, 88, '', this.hudStyle()).setFontSize('18px').setColor('#ffd166');
+    this.add.text(850, 56, 'STAR\nP+', this.hudStyle()).setFontSize('16px');
+    this.itemGauge = this.add.graphics();
     this.updateHud();
   }
 
@@ -478,37 +485,60 @@ export class GameScene extends Phaser.Scene {
   private dropItem(x: number, y: number): void {
     const itemType = Phaser.Math.RND.pick(['bomb', 'star', 'scoreBoost'] as const);
     const texture = itemType === 'bomb' ? 'itemBomb' : itemType === 'star' ? 'itemStar' : 'itemScoreBoost';
+    const effect: ItemEffect = {
+      type: itemType,
+      duration: itemType === 'star' ? STAR_DURATION : itemType === 'scoreBoost' ? SCORE_BOOST_DURATION : 0,
+    };
     const item = this.items.get(x, y, texture) as Phaser.Physics.Arcade.Sprite | null;
     if (!item) return;
     item.setTexture(texture);
-    item.enableBody(true, x, y, true, true)
-      .setData('itemType', itemType)
+    item.enableBody(true, x, y, true, true);
+    item.body?.setSize(item.displayWidth, item.displayHeight);
+    item.setActive(true).setVisible(true);
+    item.setData('itemType', itemType)
+      .setData('itemEffect', effect)
       .setVelocity(-ITEM_SPEED, 0);
   }
 
-  private collectItem(itemObject: PhysicsObject, _playerObject: PhysicsObject): void {
-    const item = this.toSprite(itemObject);
+  private collectItem(firstObject: PhysicsObject, secondObject: PhysicsObject): void {
+    const firstSprite = this.toSprite(firstObject);
+    const secondSprite = this.toSprite(secondObject);
+    const item = [firstSprite, secondSprite].find((sprite) =>
+      sprite?.active && sprite.getData('itemType') !== undefined,
+    );
     if (!item || !item.active) return;
-    const itemType = item.getData('itemType') as ItemType;
+    const itemType = item.getData('itemType') as ItemType | undefined;
+    if (!itemType) return;
+    const storedEffect = item.getData('itemEffect') as ItemEffect | undefined;
+    const itemEffect: ItemEffect = storedEffect ?? {
+      type: itemType,
+      duration: itemType === 'star' ? STAR_DURATION : itemType === 'scoreBoost' ? SCORE_BOOST_DURATION : 0,
+    };
     item.disableBody(true, true);
+    item.setActive(false).setVisible(false);
 
-    if (itemType === 'bomb') {
+    if (itemEffect.type === 'bomb') {
       this.bombStock = Math.min(3, this.bombStock + 1);
-    } else if (itemType === 'star') {
-      this.starUntil = this.elapsed + STAR_DURATION;
+    } else if (itemEffect.type === 'star') {
+      this.starUntil = this.elapsed + itemEffect.duration;
     } else {
-      this.scoreBoostUntil = this.elapsed + SCORE_BOOST_DURATION;
+      this.scoreBoostUntil = this.elapsed + itemEffect.duration;
     }
   }
 
   private useBomb(): void {
-    if (this.bombStock <= 0 || !this.bossAttacking || this.ending) return;
+    if (this.bombStock <= 0 || this.ending) return;
     this.bombStock -= 1;
-    this.damageBoss(10);
+    this.createExplosion(this.player.x, this.player.y, 1.4, 350);
+    const enemies = this.enemies.getChildren().filter((child): child is Phaser.Physics.Arcade.Sprite =>
+      child instanceof Phaser.Physics.Arcade.Sprite && child.active,
+    );
+    for (const enemy of enemies) this.killEnemy(enemy);
+    if (this.bossActive) this.damageBoss(10);
   }
 
   private damageBoss(amount: number): void {
-    if (this.ending || !this.bossAttacking) return;
+    if (this.ending || !this.bossActive) return;
     this.bossHp = Math.max(0, this.bossHp - amount);
     if (this.bossHp > 0) return;
     this.ending = true;
@@ -630,10 +660,35 @@ export class GameScene extends Phaser.Scene {
     this.hpText.setText(`HP  ${Math.max(0, this.hp)}/${PLAYER_HP}`);
     this.timeText.setText(`TIME  ${(this.elapsed / 1000).toFixed(1)}`);
     this.bossText.setText(this.bossActive ? `BOSS  ${Math.max(0, this.bossHp)}/${BOSS_HP}` : '');
-    const statuses = [`BOMB  ${this.bombStock}/3`];
-    if (this.isStarActive()) statuses.push(`STAR  ${((this.starUntil - this.elapsed) / 1000).toFixed(1)}s`);
-    if (this.elapsed < this.scoreBoostUntil) statuses.push(`P+  ${((this.scoreBoostUntil - this.elapsed) / 1000).toFixed(1)}s`);
-    this.itemText.setText(statuses.join('     '));
+    this.itemText.setText(`BOMB  ${this.bombStock}/3`);
+    this.updateItemGauges();
+  }
+
+  private updateItemGauges(): void {
+    const gaugeX = 930;
+    const firstGaugeY = 60;
+    const gaugeWidth = 320;
+    const gaugeHeight = 10;
+    const gaugeGap = 10;
+    const gauges: Array<{
+      until: number;
+      duration: number;
+      color: number;
+    }> = [
+      { until: this.starUntil, duration: STAR_DURATION, color: 0xffe066 },
+      { until: this.scoreBoostUntil, duration: SCORE_BOOST_DURATION, color: 0xa98bff },
+    ];
+
+    this.itemGauge.clear();
+    gauges.forEach((gauge, index) => {
+      const remaining = gauge.until - this.elapsed;
+      const y = firstGaugeY + index * (gaugeHeight + gaugeGap);
+      const ratio = Phaser.Math.Clamp(remaining / gauge.duration, 0, 1);
+      this.itemGauge.fillStyle(0x26344d, 1).fillRoundedRect(gaugeX, y, gaugeWidth, gaugeHeight, 4);
+      if (ratio > 0) {
+        this.itemGauge.fillStyle(gauge.color, 1).fillRoundedRect(gaugeX, y, gaugeWidth * ratio, gaugeHeight, 4);
+      }
+    });
   }
 
   private finish(cleared: boolean): void {
