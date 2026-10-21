@@ -154,7 +154,6 @@ export class GameScene extends Phaser.Scene {
     this.physics.add.overlap(this.playerBullets, this.enemies, this.hitEnemy, undefined, this);
     this.physics.add.overlap(this.playerBullets, this.boss, this.hitBoss, () => this.bossAttacking, this);
     this.physics.add.overlap(this.enemyBullets, this.player, this.hitPlayer, undefined, this);
-    this.physics.add.overlap(this.enemies, this.player, this.touchEnemy, undefined, this);
     this.physics.add.overlap(this.player, this.items, this.collectItem, undefined, this);
 
     this.scoreText = this.add.text(24, 20, '', this.hudStyle());
@@ -191,6 +190,7 @@ export class GameScene extends Phaser.Scene {
     if (this.ending) return;
     this.elapsed += delta;
     this.updatePlayer();
+    this.updateEnemyContacts();
     if (Phaser.Input.Keyboard.JustDown(this.space)) this.handleSpacePress();
     this.updateHeldFire();
     if (Phaser.Input.Keyboard.JustDown(this.bombKey)) this.useBomb();
@@ -315,6 +315,7 @@ export class GameScene extends Phaser.Scene {
     enemy.enableBody(true, startX, startY, true, true)
       .setData('type', enemyType)
       .setData('hp', config.hp)
+      .setData('contactHandled', false)
       .setData('nextFireAt', this.elapsed + (config.fireInterval ?? Infinity));
     enemy.body?.setSize(config.width, config.height);
 
@@ -440,6 +441,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private hitPlayer(object1: PhysicsObject, object2: PhysicsObject): void {
+    if (this.ending) return;
     const first = this.toSprite(object1);
     const second = this.toSprite(object2);
     const bullet = first?.texture.key === 'enemyBullet'
@@ -454,23 +456,49 @@ export class GameScene extends Phaser.Scene {
     this.damagePlayer(1);
   }
 
-  private touchEnemy(enemyObject: PhysicsObject, _playerObject: PhysicsObject): void {
-    const enemy = this.toSprite(enemyObject);
-    if (!enemy || !enemy.active) return;
+  private updateEnemyContacts(): void {
+    const playerBody = this.player.body;
+    if (!playerBody?.enable) return;
+
+    for (const child of this.enemies.getChildren()) {
+      if (!(child instanceof Phaser.Physics.Arcade.Sprite) || !child.active) continue;
+      const enemyBody = child.body;
+      if (
+        !enemyBody?.enable
+        || playerBody.right <= enemyBody.left
+        || playerBody.left >= enemyBody.right
+        || playerBody.bottom <= enemyBody.top
+        || playerBody.top >= enemyBody.bottom
+      ) continue;
+      this.touchEnemy(child);
+    }
+  }
+
+  private touchEnemy(enemy: Phaser.Physics.Arcade.Sprite): void {
+    if (this.ending) return;
+    if (!enemy.active) return;
+    if (enemy.getData('contactHandled') === true) return;
     if (this.isStarActive()) {
-      this.killEnemy(enemy);
+      enemy.setData('contactHandled', true);
+      this.time.delayedCall(0, () => this.killEnemy(enemy));
       return;
     }
     if (this.elapsed < this.invincibleUntil) return;
     const enemyType = enemy.getData('type') as EnemyType;
+    enemy.setData('contactHandled', true);
     this.damagePlayer(ENEMY_CONFIG[enemyType].contactDamage);
+    this.time.delayedCall(0, () => enemy.disableBody(true, true));
   }
 
   private damagePlayer(amount: number): void {
+    if (this.ending) return;
     this.hp -= amount;
     this.score += PLAYER_DAMAGE_SCORE;
     this.invincibleUntil = this.elapsed + PLAYER_INVINCIBLE;
-    if (this.hp <= 0) this.finish(false);
+    if (this.hp <= 0) {
+      this.ending = true;
+      this.time.delayedCall(0, () => this.finish(false));
+    }
   }
 
   private killEnemy(enemy: Phaser.Physics.Arcade.Sprite): void {
