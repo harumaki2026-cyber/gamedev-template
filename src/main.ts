@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { GameOverScene } from './scenes/GameOverScene';
 import { GameScene } from './scenes/GameScene';
 import { TitleScene } from './scenes/TitleScene';
+import { WeaponSelectScene } from './scenes/WeaponSelectScene';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -21,7 +22,7 @@ const config: Phaser.Types.Core.GameConfig = {
       fps: 60,
     },
   },
-  scene: [TitleScene, GameScene, GameOverScene],
+  scene: [TitleScene, WeaponSelectScene, GameScene, GameOverScene],
 };
 
 const game = new Phaser.Game(config);
